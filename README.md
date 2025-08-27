@@ -1,18 +1,18 @@
-# Hyperliquid Anomaly Trading Bot
+# Hyperliquid Anomaly Detection Trading Bot
 
-異常値検知に基づくHyperliquid自動取引ボット
+Hyperliquidの全perp銘柄を監視し、出来高や価格の異常を検知して自動取引を行うボットです。
 
 ## 機能
 
-- Hyperliquid APIを使用したperp価格と出来高の10秒ごとの監視
-- Z-scoreベースの異常値検知アルゴリズム
-- 異常値検出時に前回正常価格の3倍で自動指値注文
-- Discord webhookによるリアルタイム通知
-- 10分後の自動注文キャンセル機能
+- 🔍 **リアルタイム監視**: 全perp銘柄の価格と出来高を10秒ごとに監視
+- 📊 **異常検知**: 統計的手法による価格・出来高スパイクの検出
+- 💰 **自動注文**: 異常検知時に異常前価格の3倍で指値注文（100 USDC）
+- ⏰ **自動キャンセル**: 10分後に約定していない注文を自動キャンセル
+- 💬 **Discord通知**: 異常検知と取引実行をDiscordに通知
 
 ## セットアップ
 
-### 1. 必要なライブラリのインストール
+### 1. 依存関係のインストール
 
 ```bash
 pip install -r requirements.txt
@@ -20,81 +20,105 @@ pip install -r requirements.txt
 
 ### 2. 環境変数の設定
 
-`.env.example`を`.env`にコピーして、必要な情報を入力してください：
+`.env.example`をコピーして`.env`を作成し、以下の情報を設定：
 
 ```bash
 cp .env.example .env
 ```
 
-以下の項目を設定：
-- `HYPERLIQUID_API_KEY`: Hyperliquid APIキー
-- `HYPERLIQUID_API_SECRET`: Hyperliquid APIシークレット
-- `HYPERLIQUID_WALLET_ADDRESS`: ウォレットアドレス
-- `DISCORD_WEBHOOK_URL`: Discord通知用のWebhook URL
+`.env`ファイルの内容：
+```
+# Hyperliquid API credentials
+HYPERLIQUID_PRIVATE_KEY=your_private_key_here
+HYPERLIQUID_WALLET_ADDRESS=your_wallet_address_here
 
-### 3. Discord Webhook設定
+# Discord webhook for notifications
+DISCORD_WEBHOOK_URL=your_discord_webhook_url_here
 
-1. Discord サーバーの設定から「連携サービス」→「ウェブフック」を選択
-2. 「新しいウェブフック」をクリック
-3. 名前とチャンネルを設定
-4. Webhook URLをコピーして`.env`ファイルに設定
+# Trading configuration (optional)
+TRADING_SYMBOL=BTC
+MONITORING_INTERVAL=10
+ORDER_TIMEOUT=600
+```
+
+### 3. Hyperliquid APIキーの取得
+
+1. [Hyperliquid](https://app.hyperliquid.xyz)にアクセス
+2. APIセクションでAPI Walletを作成
+3. プライベートキーを`.env`に設定
+
+**重要**: プライベートキーとウォレットアドレスは同じウォレットのものである必要があります。
 
 ## 実行方法
 
+### ボットの起動
 ```bash
-python trading_bot.py
+python volume_trading_bot.py
+```
+
+### 動作確認
+
+```bash
+# 注文機能のテスト（実際に注文を出します）
+python test/test_exchange_client.py
+
+# 異常検知のテスト
+python test/test_anomaly_detector.py
+```
+
+## ファイル構成
+
+```
+hyper_adl/
+├── volume_trading_bot.py      # メインの取引ボット
+├── hyperliquid_client.py       # Hyperliquid API クライアント（情報取得用）
+├── hyperliquid_exchange.py     # Hyperliquid取引クライアント（注文実行用）
+├── volume_anomaly_detector.py  # 出来高異常検知
+├── price_anomaly_detector.py   # 価格異常検知
+├── discord_notifier.py         # Discord通知
+├── test/                        # テストスクリプト
+├── requirements.txt            # 依存関係
+├── .env.example               # 環境変数テンプレート
+└── README.md                  # このファイル
 ```
 
 ## 設定パラメータ
 
-### トレーディング設定
-- `TRADING_SYMBOL`: 取引対象シンボル（デフォルト: BTC）
-- `MONITORING_INTERVAL`: 市場監視間隔（秒）（デフォルト: 10）
-- `ORDER_TIMEOUT`: 注文タイムアウト時間（秒）（デフォルト: 600）
-- `PRICE_MULTIPLIER`: 指値価格の倍率（デフォルト: 3.0）
-- `ORDER_SIZE`: 注文サイズ（デフォルト: 0.01）
+### 異常検知の閾値
 
-### 異常値検知設定
-- `DETECTOR_WINDOW_SIZE`: 統計計算用のウィンドウサイズ（デフォルト: 60）
-- `PRICE_Z_THRESHOLD`: 価格異常値のZ-score閾値（デフォルト: 3.0）
-- `VOLUME_Z_THRESHOLD`: 出来高異常値のZ-score閾値（デフォルト: 3.0）
+`volume_anomaly_detector.py`で調整可能：
+- `spike_threshold`: 出来高スパイクの閾値（デフォルト: 2.0 = 200%）
+- `drop_threshold`: 出来高急落の閾値（デフォルト: 0.5 = 50%）
+- `history_window`: 履歴保持期間（デフォルト: 100）
 
-## ファイル構成
+### 取引パラメータ
 
-- `trading_bot.py`: メインボットロジック
-- `hyperliquid_client.py`: Hyperliquid APIクライアント
-- `anomaly_detector.py`: 異常値検知アルゴリズム
-- `discord_notifier.py`: Discord通知機能
-- `requirements.txt`: 必要なライブラリ一覧
-- `.env.example`: 環境変数のテンプレート
-
-## 動作フロー
-
-1. **監視フェーズ**: 10秒ごとに価格と出来高を取得
-2. **異常値検知**: Z-scoreベースで価格/出来高の異常を検出
-3. **注文発注**: 異常検出時、前回正常価格の3倍で指値注文
-4. **通知**: Discord webhookで注文情報を通知
-5. **タイムアウト管理**: 10分後に自動で注文キャンセル
-6. **監視再開**: キャンセル後、監視フェーズに戻る
+`volume_trading_bot.py`で調整可能：
+- `price_multiplier`: 異常前価格の倍率（デフォルト: 3.0）
+- `order_amount_usdc`: 注文金額（デフォルト: 100 USDC）
+- `cancel_after_seconds`: 自動キャンセルまでの時間（デフォルト: 600秒）
 
 ## 注意事項
 
-- APIキーとシークレットは安全に管理してください
-- 本番環境で使用する前に、テスト環境で十分に検証してください
-- 市場の状況により損失が発生する可能性があります
-- ログファイル（`trading_bot.log`）で詳細な動作を確認できます
+- **リアルマネー**: このボットは実際の資金で取引を行います
+- **リスク管理**: 適切な資金管理とリスク設定を行ってください
+- **API制限**: Hyperliquidのレート制限に注意してください
+- **監視**: ボットの動作を定期的に確認してください
 
 ## トラブルシューティング
 
-### ボットが起動しない
-- `.env`ファイルの設定を確認
-- 必要なライブラリがインストールされているか確認
+### "Order has invalid price" エラー
+- ウォレットに十分な資金があるか確認
+- 価格のtick sizeが正しいか確認（BTCは$1単位）
 
-### Discord通知が届かない
-- Webhook URLが正しいか確認
-- Discordサーバーの権限設定を確認
+### "Account value: $0" エラー
+- プライベートキーとウォレットアドレスが一致しているか確認
+- Hyperliquidに資金が入金されているか確認
 
-### 注文が発注されない
-- APIキーの権限を確認
-- ウォレットの残高を確認
-- ログファイルでエラー詳細を確認
+### 認証エラー
+- プライベートキーが正しいフォーマットか確認（0xで始まる66文字）
+- API Walletが有効化されているか確認
+
+## ライセンス
+
+MIT

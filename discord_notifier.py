@@ -92,8 +92,9 @@ class DiscordNotifier:
                     inline=False
                 )
             
+            # Send webhook synchronously in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.webhook.send, None, None, None, None, None, None, [embed])
+            await loop.run_in_executor(None, lambda: self.webhook.send(embeds=[embed]))
             
             logger.info(f"Discord notification sent for {symbol}")
             return True
@@ -145,8 +146,9 @@ class DiscordNotifier:
                     inline=False
                 )
             
+            # Send webhook synchronously in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.webhook.send, None, None, None, None, None, None, [embed])
+            await loop.run_in_executor(None, lambda: self.webhook.send(embeds=[embed]))
             
             return True
             
@@ -185,8 +187,9 @@ class DiscordNotifier:
                 inline=False
             )
             
+            # Send webhook synchronously in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.webhook.send, None, None, None, None, None, None, [embed])
+            await loop.run_in_executor(None, lambda: self.webhook.send(embeds=[embed]))
             
             return True
             
@@ -215,8 +218,9 @@ class DiscordNotifier:
                         inline=False
                     )
             
+            # Send webhook synchronously in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.webhook.send, None, None, None, None, None, None, [embed])
+            await loop.run_in_executor(None, lambda: self.webhook.send(embeds=[embed]))
             
             return True
             
@@ -245,8 +249,9 @@ class DiscordNotifier:
                         inline=True
                     )
             
+            # Send webhook synchronously in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.webhook.send, None, None, None, None, None, None, [embed])
+            await loop.run_in_executor(None, lambda: self.webhook.send(embeds=[embed]))
             
             return True
             
