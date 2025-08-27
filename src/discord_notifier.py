@@ -70,15 +70,17 @@ class DiscordNotifier:
                 inline=True
             )
             
-            if anomaly_details.get('last_normal_price'):
+            last_normal_price = anomaly_details.get('last_normal_price')
+            if last_normal_price:
                 embed.add_field(
                     name="前回正常価格",
-                    value=f"${anomaly_details['last_normal_price']:,.4f}",
+                    value=f"${last_normal_price:,.4f}",
                     inline=True
                 )
             
-            if anomaly_details.get('price_change_ratio'):
-                change_pct = (anomaly_details['price_change_ratio'] - 1) * 100
+            price_change_ratio = anomaly_details.get('price_change_ratio')
+            if price_change_ratio:
+                change_pct = (price_change_ratio - 1) * 100
                 embed.add_field(
                     name="価格変動率",
                     value=f"{change_pct:+.2f}%",
@@ -139,10 +141,11 @@ class DiscordNotifier:
                 inline=True
             )
             
-            if order_details.get('order_id'):
+            order_id = order_details.get('order_id')
+            if order_id:
                 embed.add_field(
                     name="注文ID",
-                    value=order_details['order_id'],
+                    value=str(order_id),
                     inline=False
                 )
             
@@ -269,12 +272,16 @@ class DiscordNotifier:
     
     def _format_order_details(self, order_details: Dict[str, Any]) -> str:
         lines = []
-        if order_details.get('order_id'):
-            lines.append(f"注文ID: {order_details['order_id']}")
-        if order_details.get('price'):
-            lines.append(f"価格: ${order_details['price']:,.4f}")
-        if order_details.get('size'):
-            lines.append(f"数量: {order_details['size']:,.4f}")
-        if order_details.get('is_buy') is not None:
-            lines.append(f"方向: {'買い' if order_details['is_buy'] else '売り'}")
+        order_id = order_details.get('order_id')
+        if order_id:
+            lines.append(f"注文ID: {order_id}")
+        price = order_details.get('price')
+        if price:
+            lines.append(f"価格: ${price:,.4f}")
+        size = order_details.get('size')
+        if size:
+            lines.append(f"数量: {size:,.4f}")
+        is_buy = order_details.get('is_buy')
+        if is_buy is not None:
+            lines.append(f"方向: {'買い' if is_buy else '売り'}")
         return "\n".join(lines) if lines else "詳細なし"

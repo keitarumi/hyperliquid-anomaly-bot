@@ -13,14 +13,12 @@ class VolumeAnomalyDetector:
     def __init__(
         self,
         window_size: int = 30,
-        volume_spike_threshold: float = 2.0,  # Volume spike as multiplier of mean
-        volume_drop_threshold: float = 0.3,   # Volume drop as fraction of mean
+        z_score_threshold: float = 3.0,  # Z-score threshold for anomaly detection
         min_samples: int = 10,
         min_volume_usd: float = 1000  # Minimum volume to consider
     ):
         self.window_size = window_size
-        self.volume_spike_threshold = volume_spike_threshold
-        self.volume_drop_threshold = volume_drop_threshold
+        self.z_score_threshold = z_score_threshold
         self.min_samples = min_samples
         self.min_volume_usd = min_volume_usd
         
@@ -61,9 +59,14 @@ class VolumeAnomalyDetector:
         volume_mean = np.mean(history)
         volume_std = np.std(history)
         
-        # Detect spikes and drops
-        is_spike = current_volume > volume_mean * self.volume_spike_threshold
-        is_drop = current_volume < volume_mean * self.volume_drop_threshold
+        # Calculate z-score
+        if volume_std > 0:
+            z_score = (current_volume - volume_mean) / volume_std
+        else:
+            z_score = 0
+        
+        # Detect anomaly based on z-score
+        is_anomaly = abs(z_score) > self.z_score_threshold
         
         # Calculate percentage change
         volume_change_pct = ((current_volume - volume_mean) / volume_mean * 100) if volume_mean > 0 else 0
@@ -73,20 +76,18 @@ class VolumeAnomalyDetector:
         if symbol in self.last_normal_price and self.last_normal_price[symbol] > 0:
             price_change_pct = ((current_price - self.last_normal_price[symbol]) / self.last_normal_price[symbol] * 100)
         
-        is_anomaly = is_spike or is_drop
-        
         details = {
             "is_anomaly": is_anomaly,
-            "anomaly_type": "spike" if is_spike else ("drop" if is_drop else "normal"),
+            "anomaly_type": "spike" if z_score > 0 else "drop" if z_score < 0 else "normal",
             "symbol": symbol,
             "current_price": current_price,
             "current_volume": current_volume,
             "volume_mean": volume_mean,
             "volume_std": volume_std,
+            "volume_z_score": z_score,
             "volume_change_pct": volume_change_pct,
             "price_change_pct": price_change_pct,
-            "threshold_spike": volume_mean * self.volume_spike_threshold,
-            "threshold_drop": volume_mean * self.volume_drop_threshold,
+            "z_threshold": self.z_score_threshold,
             "samples": len(history)
         }
         
