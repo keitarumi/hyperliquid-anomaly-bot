@@ -78,10 +78,8 @@ class HyperliquidExchange:
                 if asset.get("name") == symbol:
                     # Get szDecimals from metadata
                     sz_decimals = asset.get("szDecimals", 8)
-                    tick_size = 10 ** (-sz_decimals)
-                    logger.debug(f"Found {symbol} in metadata: szDecimals={sz_decimals}, tick_size={tick_size}")
                     # Return tick size based on decimals
-                    return tick_size
+                    return 10 ** (-sz_decimals)
             
             # Fallback to hardcoded values
             logger.warning(f"Symbol {symbol} not found in metadata, using fallback")
@@ -115,26 +113,15 @@ class HyperliquidExchange:
             # Get tick size for the symbol
             tick = self.get_tick_size(symbol)
             
-            logger.debug(f"Rounding price for {symbol}: original={price}, tick_size={tick}")
-            
             # Special handling for ETH (0.1 tick size)
             if symbol == "ETH":
                 # Round to nearest 0.1
-                rounded_price = round(price * 10) / 10
-                logger.debug(f"ETH special handling: {price} -> {rounded_price}")
-                return rounded_price
+                return round(price * 10) / 10
             
             # Round to nearest tick
             # Use round() to handle floating point precision issues
             num_ticks = round(price / tick)
-            
-            # For integer tick sizes, ensure minimum of 1 tick for non-zero prices
-            if tick >= 1.0 and num_ticks == 0 and price > 0:
-                logger.warning(f"{symbol}: Price ${price:.4f} too small for tick size ${tick}, using minimum 1 tick")
-                num_ticks = 1
-            
             rounded = num_ticks * tick
-            logger.debug(f"Standard rounding: {price} / {tick} = {price/tick}, rounded to {num_ticks} ticks = {rounded}")
             
             # Clean up floating point precision errors
             # Count decimal places in tick
