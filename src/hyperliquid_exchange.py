@@ -68,32 +68,35 @@ class HyperliquidExchange:
         logger.warning(f"Symbol {symbol} not found in universe, defaulting to 0")
         return 0
     
-    def get_tick_size(self, symbol: str) -> float:
-        """Get the tick size for a symbol from metadata"""
+    def get_price_decimals(self, symbol: str) -> int:
+        """Get price decimals by observing current market price"""
         try:
-            meta = self.info.meta()
-            universe = meta.get("universe", [])
+            # Get current price from API
+            all_mids = self.info.all_mids()
+            if symbol in all_mids:
+                price_str = str(all_mids[symbol])
+                if '.' in price_str:
+                    # Count decimals in the price string
+                    decimal_part = price_str.split('.')[1].rstrip('0')
+                    decimals = len(decimal_part) if decimal_part else 2
+                    logger.debug(f"{symbol} price from API: {price_str}, detected decimals: {decimals}")
+                    return decimals
+                else:
+                    return 0
             
-            for asset in universe:
-                if asset.get("name") == symbol:
-                    # Get szDecimals from metadata
-                    sz_decimals = asset.get("szDecimals", 8)
-                    # Return tick size based on decimals
-                    return 10 ** (-sz_decimals)
-            
-            # Fallback to hardcoded values
-            logger.warning(f"Symbol {symbol} not found in metadata, using fallback")
-            tick_sizes = {
-                "BTC": 1.0,
-                "ETH": 0.1,
-                "SOL": 0.01,
-                "DOGE": 0.00001,
+            # Fallback to common values
+            logger.warning(f"Could not get price for {symbol}, using fallback")
+            fallback_decimals = {
+                "BTC": 0,      # Usually integer
+                "ETH": 1,      # One decimal
+                "SOL": 2,      # Two decimals
+                "DOGE": 5,     # Five decimals
             }
-            return tick_sizes.get(symbol, 0.01)
+            return fallback_decimals.get(symbol, 4)
             
         except Exception as e:
-            logger.error(f"Error getting tick size: {e}")
-            return 0.01
+            logger.error(f"Error getting price decimals: {e}")
+            return 4  # Default to 4 decimals
     
     def get_min_size(self, symbol: str) -> float:
         """Get minimum order size for a symbol"""
@@ -108,52 +111,52 @@ class HyperliquidExchange:
         return min_sizes.get(symbol, 1)
     
     def round_price(self, price: float, symbol: str) -> float:
-        """Round price to match API price precision and tick size"""
+        """Round price to match observed API price precision"""
         try:
-            # Get tick size for the symbol
-            tick = self.get_tick_size(symbol)
+            # Get price decimals from actual API prices
+            decimals = self.get_price_decimals(symbol)
             
-            # Special handling for ETH (0.1 tick size)
-            if symbol == "ETH":
-                # Round to nearest 0.1
-                return round(price * 10) / 10
+            # Round to the observed decimal places
+            rounded = round(price, decimals)
             
-            # Round to nearest tick
-            # Use round() to handle floating point precision issues
-            num_ticks = round(price / tick)
-            rounded = num_ticks * tick
-            
-            # Clean up floating point precision errors
-            # Count decimal places in tick
-            tick_str = str(tick)
-            if '.' in tick_str and tick_str.split('.')[1].rstrip('0'):
-                # Get decimal places from tick (excluding trailing zeros)
-                decimals = len(tick_str.split('.')[1].rstrip('0'))
-                return round(rounded, decimals)
-            else:
-                # Integer tick size
-                return float(int(rounded))
+            logger.debug(f"Price rounding for {symbol}: {price:.8f} -> {rounded:.8f} ({decimals} decimals)")
+            return rounded
             
         except Exception as e:
             logger.error(f"Error rounding price: {e}")
             # Safe fallback
-            return round(price, 2)
+            return round(price, 4)
     
     def round_size(self, size: float, symbol: str) -> float:
-        """Round size to valid decimals"""
-        # Get szDecimals from metadata
-        meta = self.info.meta()
-        universe = meta.get("universe", [])
-        
-        for asset in universe:
-            if asset.get("name") == symbol:
-                sz_decimals = asset.get("szDecimals", 4)
-                if sz_decimals == 0:
-                    return round(size)  # No decimals
-                else:
-                    return round(size, sz_decimals)
-        
-        return round(size, 4)  # Default to 4 decimals
+        """Round size DOWN to valid decimals (truncate)"""
+        try:
+            # Get szDecimals from metadata
+            meta = self.info.meta()
+            universe = meta.get("universe", [])
+            
+            for asset in universe:
+                if asset.get("name") == symbol:
+                    sz_decimals = asset.get("szDecimals", 4)
+                    
+                    if sz_decimals == 0:
+                        # No decimals - truncate to integer
+                        truncated = int(size)
+                        logger.debug(f"Size truncation for {symbol}: {size:.8f} -> {truncated} (no decimals)")
+                        return float(truncated)
+                    else:
+                        # Truncate to specified decimals
+                        multiplier = 10 ** sz_decimals
+                        truncated = int(size * multiplier) / multiplier
+                        logger.debug(f"Size truncation for {symbol}: {size:.8f} -> {truncated:.{sz_decimals}f} ({sz_decimals} decimals)")
+                        return truncated
+            
+            # Default to 4 decimals with truncation
+            multiplier = 10000
+            return int(size * multiplier) / multiplier
+            
+        except Exception as e:
+            logger.error(f"Error rounding size: {e}")
+            return round(size, 4)  # Fallback to normal rounding
     
     async def place_limit_order(
         self,

@@ -89,18 +89,20 @@ python main.py
 
 ```
 hyper_adl/
-├── main.py                    # メインボット実行ファイル
-├── run.sh                     # 起動スクリプト
-├── requirements.txt           # 依存パッケージ
-├── .env                       # 環境変数（gitignore対象）
-├── config/
-│   └── .env.example          # 環境変数テンプレート
-└── src/                       # ソースコード
-    ├── __init__.py
-    ├── hyperliquid_exchange.py    # 取引所API (注文実行)
-    ├── hyperliquid_client.py      # 取引所API (データ取得)
-    ├── volume_anomaly_detector.py # ボリューム異常検知
-    └── discord_notifier.py        # Discord通知
+├── main.py                        # メインボット実行ファイル
+├── run.sh                         # 起動スクリプト
+├── requirements.txt               # 依存パッケージ
+├── .env                           # 環境変数（gitignore対象）
+├── .env.example                   # 環境変数テンプレート
+├── src/                           # ソースコード
+│   ├── __init__.py
+│   ├── hyperliquid_exchange.py    # 取引所API (注文実行・ポジション管理)
+│   ├── hyperliquid_client.py      # 取引所API (データ取得)
+│   ├── volume_anomaly_detector.py # Z-scoreベース異常検知
+│   └── discord_notifier.py        # Discord通知
+└── tests/                         # テストスクリプト（デバッグ用）
+    ├── README.md                  # テスト説明
+    └── *.py                       # 各種テストスクリプト
 ```
 
 ## 動作フロー
@@ -118,6 +120,28 @@ hyper_adl/
    - 約定済みポジション: 30分（デフォルト）経過後に自動マーケットクローズ
    - 注文中・ポジション保有中は新規注文をブロック
    - 全イベントでDiscord通知
+
+## 価格・数量の処理ロジック
+
+### 価格の丸め処理
+- **方式**: APIから取得した現在価格の小数点桁数を検出し、同じ精度で丸め
+- **例**: 
+  - ARK: API価格 $0.457285（6桁）→ 注文価格も6桁で丸め
+  - BTC: API価格 $112939.5（1桁）→ 注文価格も1桁で丸め
+  - SOL: API価格 $211.265（3桁）→ 注文価格も3桁で丸め
+
+### 数量（サイズ）の切り捨て処理
+- **方式**: Hyperliquidメタデータの`szDecimals`に従って切り捨て（端数切り捨て）
+- **例**:
+  - ARK: szDecimals=0 → 181.198 → 181（整数単位）
+  - BTC: szDecimals=5 → 0.000897 → 0.00089（5桁まで）
+  - SOL: szDecimals=2 → 0.487 → 0.48（2桁まで）
+
+### なぜこの処理が必要か
+- Hyperliquidは銘柄ごとに価格精度と数量精度が異なる
+- 価格精度はAPIドキュメントに記載がないため、実際の価格から推定
+- 数量精度はメタデータで明示的に定義されている
+- 適切な精度で注文しないと、注文が拒否される場合がある
 
 ## パラメータ説明
 

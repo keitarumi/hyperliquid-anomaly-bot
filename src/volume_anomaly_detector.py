@@ -63,10 +63,15 @@ class VolumeAnomalyDetector:
         if volume_std > 0:
             z_score = (current_volume - volume_mean) / volume_std
         else:
-            z_score = 0
+            # When std is 0, all historical values are the same
+            # Check if current value is different from the mean
+            if current_volume != volume_mean and self.z_score_threshold == 0:
+                z_score = 1.0  # Treat any difference as anomaly when threshold is 0
+            else:
+                z_score = 0
         
         # Detect anomaly based on z-score
-        is_anomaly = abs(z_score) > self.z_score_threshold
+        is_anomaly = abs(z_score) >= self.z_score_threshold if self.z_score_threshold == 0 else abs(z_score) > self.z_score_threshold
         
         # Calculate percentage change
         volume_change_pct = ((current_volume - volume_mean) / volume_mean * 100) if volume_mean > 0 else 0
@@ -102,9 +107,10 @@ class VolumeAnomalyDetector:
             volume = data.get("volume_24h", 0)
             
             if price > 0 and volume >= self.min_volume_usd:
+                # Detect anomaly based on existing history
                 is_anomaly, details = self.detect_anomaly(symbol, price, volume)
                 
-                # Update historical data
+                # Always update historical data after detection
                 self.update_data(symbol, price, volume)
                 
                 if is_anomaly:

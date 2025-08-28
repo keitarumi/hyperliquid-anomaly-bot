@@ -74,7 +74,7 @@ class AnomalyTradingBot:
             window_size=self.detector_window_size,
             z_score_threshold=self.volume_z_threshold,
             min_samples=10,
-            min_volume_usd=1000
+            min_volume_usd=0  # No minimum volume filter
         )
         self.notifier = DiscordNotifier(self.discord_webhook)
         
