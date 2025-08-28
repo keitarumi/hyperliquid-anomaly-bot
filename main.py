@@ -30,13 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 class AnomalyTradingBot:
-    """Main trading bot that monitors all perps for anomalies"""
+    """Main trading bot class"""
     
     def __init__(self):
-        # Load environment variables
+        """Initialize the trading bot"""
         load_dotenv()
         
-        # Get credentials
+        # Load configuration
         self.private_key = os.getenv('HYPERLIQUID_PRIVATE_KEY')
         self.main_wallet = os.getenv('HYPERLIQUID_MAIN_WALLET_ADDRESS')
         self.discord_webhook = os.getenv('DISCORD_WEBHOOK_URL')
@@ -45,13 +45,31 @@ class AnomalyTradingBot:
         self.monitoring_interval = int(os.getenv('MONITORING_INTERVAL', 10))
         self.order_timeout = int(os.getenv('ORDER_TIMEOUT', 600))  # Cancel unfilled orders after this time
         self.position_close_timeout = int(os.getenv('POSITION_CLOSE_TIMEOUT', 1800))  # Close positions after 30 minutes
-        self.price_multiplier = float(os.getenv('PRICE_MULTIPLIER', 3.0))
-        self.order_amount_usdc = float(os.getenv('ORDER_AMOUNT_USDC', 100))  # Order size in USDC
+        
+        # Parse multiple price multipliers and order amounts
+        price_multipliers_str = os.getenv('PRICE_MULTIPLIERS', '3.0')
+        order_amounts_str = os.getenv('ORDER_AMOUNTS_USDC', '100')
+        
+        self.price_multipliers = [float(x.strip()) for x in price_multipliers_str.split(',')]
+        self.order_amounts_usdc = [float(x.strip()) for x in order_amounts_str.split(',')]
+        
+        # Validate that multipliers and amounts have the same count
+        if len(self.price_multipliers) != len(self.order_amounts_usdc):
+            error_msg = (
+                f"Configuration error: Price multipliers count ({len(self.price_multipliers)}) "
+                f"does not match order amounts count ({len(self.order_amounts_usdc)}). "
+                f"Multipliers: {self.price_multipliers}, Amounts: {self.order_amounts_usdc}"
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
         self.max_concurrent_orders = int(os.getenv('MAX_CONCURRENT_ORDERS', 1))  # Max orders at once
         
         # Detection parameters
         self.detector_window_size = int(os.getenv('DETECTOR_WINDOW_SIZE', 60))
         self.volume_z_threshold = float(os.getenv('VOLUME_Z_THRESHOLD', 3.0))
+        self.price_z_threshold = float(os.getenv('PRICE_Z_THRESHOLD', 3.0))
+        self.detection_mode = os.getenv('DETECTION_MODE', 'vol_only')
         
         # Symbol filter
         symbols_config = os.getenv('SYMBOLS', '').strip()
@@ -72,82 +90,68 @@ class AnomalyTradingBot:
         self.exchange = HyperliquidExchange(self.private_key, self.main_wallet)
         self.detector = VolumeAnomalyDetector(
             window_size=self.detector_window_size,
-            z_score_threshold=self.volume_z_threshold,
+            volume_z_threshold=self.volume_z_threshold,
+            price_z_threshold=self.price_z_threshold,
+            detection_mode=self.detection_mode,
             min_samples=10,
             min_volume_usd=0  # No minimum volume filter
         )
         self.notifier = DiscordNotifier(self.discord_webhook)
         
         # Track active orders and positions
-        self.active_orders = {}  # Track pending orders
+        self.active_orders = {}  # Track pending orders by symbol
         self.position_tracker = {}  # Track positions to close after timeout
+        
+        # Control flag
         self.running = False
         
+        # Log configuration
         logger.info("Initialized Anomaly Trading Bot")
         logger.info(f"  API Wallet: {self.exchange.api_wallet_address}")
         logger.info(f"  Main Wallet: {self.main_wallet}")
         logger.info(f"  Monitoring Interval: {self.monitoring_interval}s")
-        logger.info(f"  Price Multiplier: {self.price_multiplier}x")
+        logger.info(f"  Price Multipliers: {self.price_multipliers}")
+        logger.info(f"  Order Amounts: {self.order_amounts_usdc} USDC")
         logger.info(f"  Order Timeout: {self.order_timeout}s")
         logger.info(f"  Position Close Timeout: {self.position_close_timeout}s")
         logger.info(f"  Target Symbols: {len(self.target_symbols) if self.target_symbols else 'All'} symbols")
         logger.info(f"  Max Concurrent Orders: {self.max_concurrent_orders}")
+        logger.info(f"  Detection Mode: {self.detection_mode}")
+        logger.info(f"  Volume Z-threshold: {self.volume_z_threshold}")
+        logger.info(f"  Price Z-threshold: {self.price_z_threshold}")
         
     async def start(self):
         """Start the trading bot"""
         self.running = True
         logger.info("Starting trading bot...")
         
-        try:
-            # Send startup notification
-            wallet_display = str(self.main_wallet)[:8] + "..." if self.main_wallet and len(str(self.main_wallet)) > 8 else str(self.main_wallet or "N/A")
-            await self.notifier.send_status_update(
-                "🚀 Trading Bot Started",
-                {
-                    "Main Wallet": wallet_display,
-                    "Monitoring Interval": f"{self.monitoring_interval}s",
-                    "Price Multiplier": f"{self.price_multiplier}x",
-                    "Order Size": f"${self.order_amount_usdc}",
-                    "Symbols": ', '.join(self.target_symbols) if self.target_symbols else "All"
-                }
-            )
-        except Exception as e:
-            logger.error(f"Failed to send startup notification: {e}")
+        # Send startup notification
+        await self.notifier.send_status_update(
+            "🚀 Bot Started",
+            {
+                "Wallet": self.main_wallet[-8:] + "...",
+                "Monitoring": f"{len(self.target_symbols) if self.target_symbols else 'All'} symbols",
+                "Mode": self.detection_mode,
+                "Orders Config": f"{len(self.price_multipliers)} orders per anomaly"
+            }
+        )
         
-        # Check account balance
+        # Get initial balance
         try:
             user_state = self.exchange.get_user_state()
-            if 'marginSummary' in user_state:
-                balance = user_state['marginSummary'].get('accountValue', 0)
-                logger.info(f"Account balance: ${balance}")
-                
-                if float(balance) < 500:
-                    logger.warning("Low account balance!")
-                    await self.notifier.send_error_notification(
-                        "⚠️ Low Balance Warning",
-                        {"Balance": f"${balance}", "Recommended": "$500+"}
-                    )
-            else:
-                logger.warning("Could not fetch account balance")
-                await self.notifier.send_error_notification(
-                    "⚠️ Balance Check Failed",
-                    {"Error": "Could not fetch account state"}
-                )
+            balance = user_state.get("marginSummary", {}).get("accountValue", 0)
+            logger.info(f"Account balance: ${balance}")
         except Exception as e:
-            logger.error(f"Error checking balance: {e}")
-            await self.notifier.send_error_notification(
-                "❌ Balance Check Error",
-                {"Error": str(e)}
-            )
+            logger.error(f"Failed to get account balance: {e}")
         
-        # Main monitoring loop
         iteration = 0
         while self.running:
+            iteration += 1
+            
             try:
-                iteration += 1
                 logger.info(f"Starting iteration {iteration}")
                 
-                # Get all market data
+                # Fetch market data
                 try:
                     asset_data = await self.client.get_all_asset_data()
                     
@@ -205,7 +209,7 @@ class AnomalyTradingBot:
                                 
                                 try:
                                     await self.process_anomaly(anomaly)
-                                    # After placing an order, skip remaining anomalies
+                                    # After placing orders, skip remaining anomalies
                                     if len(self.active_orders) > 0:
                                         break
                                     await asyncio.sleep(1)  # Rate limiting
@@ -252,7 +256,7 @@ class AnomalyTradingBot:
         logger.info("Trading bot stopped")
     
     async def process_anomaly(self, anomaly):
-        """Process detected anomaly and place order"""
+        """Process detected anomaly and place multiple orders"""
         # Safe anomaly access with type checking
         if not isinstance(anomaly, dict):
             logger.error(f"Anomaly is not a dict: {type(anomaly)}")
@@ -265,7 +269,7 @@ class AnomalyTradingBot:
         
         # Skip if already has active order for this symbol
         if symbol in self.active_orders:
-            logger.info(f"Skipping {symbol} - already has active order")
+            logger.info(f"Skipping {symbol} - already has active orders")
             return
         
         # Check max concurrent orders limit
@@ -283,11 +287,6 @@ class AnomalyTradingBot:
             # Ensure price is a float
             last_normal_price = float(last_normal_price)
             
-            # Calculate target price (3x pre-anomaly price)
-            target_price = last_normal_price * self.price_multiplier
-            order_size = self.order_amount_usdc / target_price
-            
-            # Determine order side with safe access
             current_price = anomaly.get('current_price', 0)
             if not current_price:
                 logger.warning(f"No current price in anomaly for {symbol}")
@@ -295,25 +294,19 @@ class AnomalyTradingBot:
             
             current_price = float(current_price)
             current_volume = float(anomaly.get('current_volume', 0))
-            is_buy = current_price < last_normal_price
             
-            logger.info(f"Placing {'BUY' if is_buy else 'SELL'} order for {symbol}")
-            logger.info(f"  Last normal price: ${last_normal_price:.4f}")
-            logger.info(f"  Current price: ${current_price:.4f}")
-            logger.info(f"  Target price: ${target_price:.4f}")
-            logger.info(f"  Order size: {order_size:.6f} {symbol}")
-            
-            # Send anomaly detection notification with safe details
+            # Send anomaly detection notification
             safe_anomaly_details = {
                 'symbol': str(symbol),
                 'current_price': float(current_price),
                 'current_volume': float(current_volume),
                 'last_normal_price': float(last_normal_price),
                 'price_change_ratio': float(current_price / last_normal_price) if last_normal_price > 0 else 1.0,
-                'volume_z_score': float(anomaly.get('volume_change_pct', 0)),
-                'price_z_score': float(anomaly.get('price_change_pct', 0)),
-                'volume_anomaly': True,
-                'price_anomaly': abs(current_price - last_normal_price) > 0.01
+                'volume_z_score': float(anomaly.get('volume_z_score', 0)),
+                'price_z_score': float(anomaly.get('price_z_score', 0)),
+                'volume_anomaly': anomaly.get('volume_anomaly', False),
+                'price_anomaly': anomaly.get('price_anomaly', False),
+                'detection_mode': self.detection_mode
             }
             
             await self.notifier.send_anomaly_notification(
@@ -321,59 +314,94 @@ class AnomalyTradingBot:
                 anomaly_details=safe_anomaly_details
             )
             
-            # Place order
-            result = await self.exchange.place_limit_order(
-                symbol=symbol,
-                is_buy=is_buy,
-                price=target_price,
-                size=order_size,
-                post_only=True
-            )
-            
-            if result.get('status') == 'success':
-                order_id = result.get('order_id')
-                order_time = datetime.now()
-                self.active_orders[symbol] = {
-                    'order_id': order_id,
-                    'price': target_price,
-                    'size': order_size,
-                    'is_buy': is_buy,
-                    'placed_at': order_time,
-                    'last_normal_price': last_normal_price
-                }
+            # Place multiple orders with different multipliers and amounts
+            orders_placed = []
+            for i, (multiplier, amount_usdc) in enumerate(zip(self.price_multipliers, self.order_amounts_usdc)):
+                # Calculate target price and order size for this order
+                target_price = last_normal_price * multiplier
+                order_size = amount_usdc / target_price
                 
-                # Track position for future closing
-                self.position_tracker[symbol] = {
-                    'opened_at': order_time,
-                    'is_buy': is_buy,
-                    'entry_price': target_price,
-                    'size': order_size
-                }
+                # Determine order side based on multiplier
+                # If multiplier > 1: SELL (short) at higher price
+                # If multiplier < 1: BUY (long) at lower price
+                is_buy = multiplier < 1.0
                 
-                # Send notification with safe order details
-                await self.notifier.send_order_placed_notification(
+                logger.info(f"Placing order {i+1}/{len(self.price_multipliers)} for {symbol}")
+                logger.info(f"  Multiplier: {multiplier}x")
+                logger.info(f"  Side: {'BUY' if is_buy else 'SELL'}")
+                logger.info(f"  Target price: ${target_price:.4f}")
+                logger.info(f"  Order size: {order_size:.6f} {symbol}")
+                logger.info(f"  Amount: ${amount_usdc}")
+                
+                # Place order
+                result = await self.exchange.place_limit_order(
                     symbol=symbol,
-                    order_details={
-                        'order_id': str(order_id) if order_id else 'Unknown',
-                        'is_buy': is_buy,
-                        'price': float(target_price),
-                        'size': float(order_size)
-                    }
+                    is_buy=is_buy,
+                    price=target_price,
+                    size=order_size,
+                    post_only=True
                 )
                 
-                logger.info(f"Order placed successfully: {order_id}")
-            else:
-                error_msg = result.get('message', 'Unknown error')
-                logger.error(f"Failed to place order: {error_msg}")
-                await self.notifier.send_error_notification(
-                    "❌ Order Failed",
-                    {
-                        "Symbol": symbol,
-                        "Error": error_msg,
-                        "Price": f"${target_price:.4f}",
-                        "Size": f"{order_size:.6f}"
+                if result.get('status') == 'success':
+                    order_id = result.get('order_id')
+                    order_info = {
+                        'order_id': order_id,
+                        'price': target_price,
+                        'size': order_size,
+                        'is_buy': is_buy,
+                        'placed_at': datetime.now(),
+                        'last_normal_price': last_normal_price,
+                        'multiplier': multiplier,
+                        'amount_usdc': amount_usdc
                     }
-                )
+                    orders_placed.append(order_info)
+                    
+                    # Send notification for this order
+                    await self.notifier.send_order_placed_notification(
+                        symbol=symbol,
+                        order_details={
+                            'order_id': str(order_id) if order_id else 'Unknown',
+                            'is_buy': is_buy,
+                            'price': float(target_price),
+                            'size': float(order_size),
+                            'multiplier': float(multiplier),
+                            'amount_usdc': float(amount_usdc),
+                            'order_number': i + 1,
+                            'total_orders': len(self.price_multipliers)
+                        }
+                    )
+                    
+                    logger.info(f"Order {i+1} placed successfully: {order_id}")
+                else:
+                    error_msg = result.get('message', 'Unknown error')
+                    logger.error(f"Failed to place order {i+1}: {error_msg}")
+                    await self.notifier.send_error_notification(
+                        f"❌ Order {i+1} Failed",
+                        {
+                            "Symbol": symbol,
+                            "Error": error_msg,
+                            "Price": f"${target_price:.4f}",
+                            "Size": f"{order_size:.6f}",
+                            "Multiplier": f"{multiplier}x"
+                        }
+                    )
+            
+            # Store all orders for this symbol
+            if orders_placed:
+                self.active_orders[symbol] = orders_placed
+                
+                # Track position for future closing (using first order as reference)
+                first_order = orders_placed[0]
+                self.position_tracker[symbol] = {
+                    'opened_at': first_order['placed_at'],
+                    'is_buy': first_order['is_buy'],
+                    'entry_prices': [o['price'] for o in orders_placed],
+                    'sizes': [o['size'] for o in orders_placed],
+                    'total_size': sum(o['size'] for o in orders_placed),
+                    'orders_count': len(orders_placed)
+                }
+                
+                logger.info(f"Successfully placed {len(orders_placed)}/{len(self.price_multipliers)} orders for {symbol}")
                 
         except Exception as e:
             logger.error(f"Error processing anomaly for {symbol}: {e}", exc_info=True)
@@ -395,13 +423,17 @@ class AnomalyTradingBot:
             if symbol not in self.position_tracker and symbol in self.active_orders:
                 # Order got filled, move from active_orders to position_tracker
                 logger.info(f"Order for {symbol} got filled, tracking position")
-                order_info = self.active_orders[symbol]
-                self.position_tracker[symbol] = {
-                    'opened_at': order_info.get('placed_at', current_time),
-                    'is_buy': order_info.get('is_buy'),
-                    'entry_price': position.get('entry_px', order_info.get('price')),
-                    'size': abs(position.get('size', order_info.get('size')))
-                }
+                orders_info = self.active_orders[symbol]
+                if isinstance(orders_info, list) and len(orders_info) > 0:
+                    first_order = orders_info[0]
+                    self.position_tracker[symbol] = {
+                        'opened_at': first_order.get('placed_at', current_time),
+                        'is_buy': first_order.get('is_buy'),
+                        'entry_prices': [o['price'] for o in orders_info],
+                        'sizes': [o['size'] for o in orders_info],
+                        'total_size': sum(o['size'] for o in orders_info),
+                        'orders_count': len(orders_info)
+                    }
                 del self.active_orders[symbol]
         
         for symbol in list(self.position_tracker.keys()):
@@ -458,7 +490,7 @@ class AnomalyTradingBot:
                                 "Symbol": symbol,
                                 "Size": f"{abs(position_size):.6f}",
                                 "Direction": "Long" if position_size > 0 else "Short",
-                                "Entry Price": f"${tracker.get('entry_price', 0):.2f}",
+                                "Entry Prices": tracker.get('entry_prices', []),
                                 "PnL": f"${position.get('pnl', 0):.2f}",
                                 "Time Held": f"{elapsed}s"
                             }
@@ -490,149 +522,109 @@ class AnomalyTradingBot:
         current_time = datetime.now()
         
         for symbol in list(self.active_orders.keys()):
-            order = self.active_orders[symbol]
-            # Ensure order is a dictionary
-            if not isinstance(order, dict):
-                logger.error(f"Invalid order format for {symbol}: {type(order)}")
-                del self.active_orders[symbol]
-                continue
+            orders = self.active_orders[symbol]
             
-            placed_at = order.get('placed_at')
-            if not placed_at:
-                logger.error(f"No placed_at timestamp for {symbol}")
-                del self.active_orders[symbol]
-                continue
-                
-            elapsed = (current_time - placed_at).seconds
+            # Handle both single orders and lists of orders
+            if not isinstance(orders, list):
+                orders = [orders]
             
-            if elapsed >= self.order_timeout:
-                logger.info(f"Cancelling expired order for {symbol}")
+            remaining_orders = []
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                    
+                placed_at = order.get('placed_at')
+                if not placed_at:
+                    continue
                 
-                try:
-                    order_id = order.get('order_id') if isinstance(order, dict) else None
-                    if not order_id:
-                        logger.error(f"No order_id found for {symbol}")
-                        del self.active_orders[symbol]
-                        continue
+                elapsed = (current_time - placed_at).seconds
+                
+                if elapsed >= self.order_timeout:
+                    order_id = order.get('order_id')
+                    logger.info(f"Cancelling expired order {order_id} for {symbol} (age: {elapsed}s)")
                     
-                    result = await self.exchange.cancel_order(
-                        symbol=symbol,
-                        order_id=order_id
-                    )
-                    
-                    if result.get('status') == 'success':
-                        order_id_value = order.get('order_id') if isinstance(order, dict) else order
-                        logger.info(f"Order cancelled: {order_id_value}")
-                        
-                        # Send notification
-                        await self.notifier.send_order_cancelled_notification(
-                            symbol=symbol,
-                            order_id=str(order_id_value),
-                            reason='Timeout'
-                        )
-                    
-                    # Only remove from active orders, keep position tracker for actual position management
-                    del self.active_orders[symbol]
-                    
-                except Exception as e:
-                    logger.error(f"Error cancelling order for {symbol}: {e}")
                     try:
-                        # Ensure order_id is converted to string properly
-                        order_id = order.get('order_id', 'Unknown')
-                        order_id_str = str(order_id)
-                        # Only truncate if it's actually a string with content
-                        if isinstance(order_id_str, str) and len(order_id_str) > 8:
-                            display_id = order_id_str[:8] + "..."
+                        result = await self.exchange.cancel_order(symbol, order_id)
+                        if result.get('status') == 'success':
+                            logger.info(f"Successfully cancelled order {order_id}")
+                            await self.notifier.send_status_update(
+                                "⏱️ Order Cancelled (Timeout)",
+                                {
+                                    "Symbol": symbol,
+                                    "Order ID": str(order_id)[:8] + "...",
+                                    "Price": f"${order.get('price', 0):.4f}",
+                                    "Multiplier": f"{order.get('multiplier', 0)}x",
+                                    "Time": f"{elapsed}s"
+                                }
+                            )
                         else:
-                            display_id = order_id_str
-                        await self.notifier.send_error_notification(
-                            "❌ Cancel Order Error",
-                            {"Symbol": symbol, "Order ID": display_id, "Error": str(e)}
-                        )
-                    except Exception as notify_error:
-                        logger.error(f"Failed to send error notification: {notify_error}")
-                    del self.active_orders[symbol]
+                            logger.error(f"Failed to cancel order: {result}")
+                            remaining_orders.append(order)
+                    except Exception as e:
+                        logger.error(f"Error cancelling order {order_id}: {e}")
+                        remaining_orders.append(order)
+                else:
+                    remaining_orders.append(order)
+            
+            # Update or remove orders for this symbol
+            if remaining_orders:
+                self.active_orders[symbol] = remaining_orders
+            else:
+                del self.active_orders[symbol]
+                # Also remove from position tracker if no orders left
+                if symbol in self.position_tracker:
+                    del self.position_tracker[symbol]
     
     async def send_status_update(self, iteration):
         """Send periodic status update"""
         try:
             user_state = self.exchange.get_user_state()
-            balance = 0
+            balance = user_state.get("marginSummary", {}).get("accountValue", 0)
             
-            if 'marginSummary' in user_state:
-                balance = user_state['marginSummary'].get('accountValue', 0)
+            positions = self.exchange.get_positions()
             
-            await self.notifier.send_status_update(
-                "📊 Bot Status Update",
-                {
-                    "Iteration": iteration,
-                    "Active Orders": len(self.active_orders),
-                    "Account Balance": f"${balance}",
-                    "Uptime": f"{iteration * self.monitoring_interval}s"
-                }
-            )
+            status_data = {
+                "Iteration": iteration,
+                "Balance": f"${balance}",
+                "Active Orders": len(self.active_orders),
+                "Open Positions": len(positions),
+                "Symbols Monitored": len(self.target_symbols) if self.target_symbols else "All"
+            }
+            
+            await self.notifier.send_status_update("📊 Status Update", status_data)
         except Exception as e:
-            logger.error(f"Error sending status update: {e}")
+            logger.error(f"Failed to send status update: {e}")
     
     def stop(self):
         """Stop the trading bot"""
-        logger.info("Stopping trading bot...")
         self.running = False
+        logger.info("Stopping trading bot...")
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    logger.info(f"Received signal {signum}")
+    if hasattr(signal_handler, 'bot'):
+        signal_handler.bot.stop()
 
 
 async def main():
     """Main entry point"""
-    bot = None
+    bot = AnomalyTradingBot()
+    signal_handler.bot = bot
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        bot = AnomalyTradingBot()
-        
-        # Setup signal handlers
-        def signal_handler(sig, frame):
-            logger.info("Received shutdown signal")
-            if bot:
-                bot.stop()
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
         await bot.start()
-        
     except KeyboardInterrupt:
-        logger.info("Bot interrupted by user")
-        if bot and hasattr(bot, 'notifier'):
-            try:
-                await bot.notifier.send_status_update(
-                    "🛑 Bot Stopped",
-                    {"Reason": "User interrupted"}
-                )
-            except:
-                pass
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        print(f"\n❌ Configuration Error: {e}")
-        print("Please check your .env file configuration")
+        logger.info("Keyboard interrupt received")
+        bot.stop()
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        if bot and hasattr(bot, 'notifier'):
-            try:
-                await bot.notifier.send_error_notification(
-                    "💀 Bot Fatal Error",
-                    {"Error": str(e), "Type": type(e).__name__}
-                )
-            except:
-                pass
-        print(f"\n❌ Fatal Error: {e}")
-    finally:
-        logger.info("Shutdown complete")
-        if bot and hasattr(bot, 'notifier'):
-            try:
-                await bot.notifier.send_status_update(
-                    "⚪ Bot Shutdown Complete",
-                    {"Status": "Offline"}
-                )
-            except:
-                pass
+        bot.stop()
 
 
 if __name__ == "__main__":
