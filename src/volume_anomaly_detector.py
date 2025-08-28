@@ -111,8 +111,22 @@ class VolumeAnomalyDetector:
                 price_z_score = 0
         
         # Detect anomaly based on detection mode
-        volume_anomaly = abs(volume_z_score) >= self.volume_z_threshold if self.volume_z_threshold == 0 else abs(volume_z_score) > self.volume_z_threshold
-        price_anomaly = abs(price_z_score) >= self.price_z_threshold if self.price_z_threshold == 0 else abs(price_z_score) > self.price_z_threshold
+        # If threshold is positive, only detect upward spikes
+        # If threshold is negative, only detect downward spikes  
+        # If threshold is 0, detect any change
+        if self.volume_z_threshold > 0:
+            volume_anomaly = volume_z_score > self.volume_z_threshold
+        elif self.volume_z_threshold < 0:
+            volume_anomaly = volume_z_score < self.volume_z_threshold
+        else:
+            volume_anomaly = abs(volume_z_score) > 0
+        
+        if self.price_z_threshold > 0:
+            price_anomaly = price_z_score > self.price_z_threshold
+        elif self.price_z_threshold < 0:
+            price_anomaly = price_z_score < self.price_z_threshold
+        else:
+            price_anomaly = abs(price_z_score) > 0
         
         if self.detection_mode == "vol_only":
             is_anomaly = volume_anomaly
