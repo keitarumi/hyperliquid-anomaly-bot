@@ -59,19 +59,43 @@ class VolumeAnomalyDetector:
         if len(volume_history) < self.min_samples:
             return False, {"reason": "Insufficient data", "samples": len(volume_history)}
         
-        # Calculate volume statistics
-        volume_mean = np.mean(volume_history)
-        volume_std = np.std(volume_history)
+        # Calculate volume increments (differences between consecutive samples)
+        # This is more sensitive to short-term changes than cumulative volume
+        volume_increments = []
+        for i in range(1, len(volume_history)):
+            increment = volume_history[i] - volume_history[i-1]
+            volume_increments.append(increment)
         
-        # Calculate volume z-score
-        if volume_std > 0:
-            volume_z_score = (current_volume - volume_mean) / volume_std
+        # Current volume increment
+        if len(volume_history) > 0:
+            current_increment = current_volume - volume_history[-1]
         else:
-            # When std is 0, all historical values are the same
-            if current_volume != volume_mean and self.volume_z_threshold == 0:
-                volume_z_score = 1.0  # Treat any difference as anomaly when threshold is 0
+            current_increment = 0
+        
+        # Calculate volume z-score based on increments
+        if len(volume_increments) >= 2:
+            increment_mean = np.mean(volume_increments)
+            increment_std = np.std(volume_increments)
+            
+            if increment_std > 0:
+                volume_z_score = (current_increment - increment_mean) / increment_std
             else:
-                volume_z_score = 0
+                # When std is 0, check if current increment is different
+                if abs(current_increment - increment_mean) > 1000 and self.volume_z_threshold == 0:
+                    volume_z_score = 1.0
+                else:
+                    volume_z_score = 0
+            
+            # Calculate change rate for display
+            if volume_history[-1] > 0:
+                current_volume_change = current_increment / volume_history[-1]
+            else:
+                current_volume_change = 0
+        else:
+            volume_z_score = 0
+            increment_mean = 0
+            increment_std = 0
+            current_volume_change = 0
         
         # Calculate price statistics
         price_mean = np.mean(price_history)
@@ -102,7 +126,7 @@ class VolumeAnomalyDetector:
             is_anomaly = volume_anomaly  # Default to volume only
         
         # Calculate percentage changes
-        volume_change_pct = ((current_volume - volume_mean) / volume_mean * 100) if volume_mean > 0 else 0
+        volume_change_pct = current_volume_change * 100  # Already a rate, just convert to percent
         price_change_pct = ((current_price - price_mean) / price_mean * 100) if price_mean > 0 else 0
         
         # Determine anomaly type
@@ -127,8 +151,9 @@ class VolumeAnomalyDetector:
             "symbol": symbol,
             "current_price": current_price,
             "current_volume": current_volume,
-            "volume_mean": volume_mean,
-            "volume_std": volume_std,
+            "volume_increment": current_increment,  # Actual volume increment in USD
+            "increment_mean": increment_mean,  # Mean increment
+            "increment_std": increment_std,  # Std of increments
             "volume_z_score": volume_z_score,
             "volume_change_pct": volume_change_pct,
             "volume_anomaly": volume_anomaly,
