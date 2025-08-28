@@ -4,4 +4,4 @@ python-dotenv>=1.0.0
 numpy>=1.24.0
 aiohttp>=3.8.0
 eth-account>=0.10.0
-pyyaml>=6.0
+pybotters>=1.4.0
