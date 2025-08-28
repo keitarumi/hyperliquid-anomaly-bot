@@ -111,21 +111,70 @@ class HyperliquidExchange:
         return min_sizes.get(symbol, 1)
     
     def round_price(self, price: float, symbol: str) -> float:
-        """Round price to match observed API price precision"""
+        """Round price to match tick size requirements"""
         try:
-            # Get price decimals from actual API prices
-            decimals = self.get_price_decimals(symbol)
+            # Get tick size based on symbol and price range
+            tick_size = self.get_tick_size(symbol, price)
             
-            # Round to the observed decimal places
-            rounded = round(price, decimals)
-            
-            logger.debug(f"Price rounding for {symbol}: {price:.8f} -> {rounded:.8f} ({decimals} decimals)")
-            return rounded
+            # Round to nearest tick
+            if tick_size > 0:
+                rounded = round(price / tick_size) * tick_size
+                # Clean up floating point artifacts
+                if tick_size >= 1:
+                    rounded = round(rounded)  # Integer prices
+                elif tick_size >= 0.1:
+                    rounded = round(rounded, 1)
+                elif tick_size >= 0.01:
+                    rounded = round(rounded, 2)
+                elif tick_size >= 0.001:
+                    rounded = round(rounded, 3)
+                elif tick_size >= 0.0001:
+                    rounded = round(rounded, 4)
+                else:
+                    rounded = round(rounded, 5)
+                
+                logger.debug(f"Price rounding for {symbol}: {price:.8f} -> {rounded:.8f} (tick: {tick_size})")
+                return rounded
+            else:
+                # Fallback to decimal rounding
+                decimals = self.get_price_decimals(symbol)
+                rounded = round(price, decimals)
+                return rounded
             
         except Exception as e:
             logger.error(f"Error rounding price: {e}")
             # Safe fallback
             return round(price, 4)
+    
+    def get_tick_size(self, symbol: str, price: float) -> float:
+        """Get tick size for a symbol based on typical patterns"""
+        # Hardcoded tick sizes based on observed patterns
+        # These may need adjustment based on Hyperliquid's rules
+        
+        if symbol == 'BTC':
+            return 1.0  # $1 tick
+        elif symbol == 'ETH':
+            return 0.1  # $0.10 tick
+        elif symbol == 'SOL':
+            return 0.01  # $0.01 tick
+        elif symbol in ['DOGE', 'PEPE', 'WIF', 'BONK', 'FLOKI']:
+            return 0.00001  # $0.00001 tick for meme coins
+        elif symbol == 'ARK':
+            return 0.00002  # $0.00002 tick
+        else:
+            # Default based on price magnitude
+            if price >= 10000:
+                return 1.0
+            elif price >= 1000:
+                return 0.1
+            elif price >= 100:
+                return 0.01
+            elif price >= 10:
+                return 0.001
+            elif price >= 1:
+                return 0.0001
+            else:
+                return 0.00001
     
     def round_size(self, size: float, symbol: str) -> float:
         """Round size DOWN to valid decimals (truncate)"""
