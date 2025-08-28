@@ -236,9 +236,9 @@ class AnomalyTradingBot:
                 # Check and close positions that are too old
                 await self.check_and_close_old_positions()
                 
-                # Status update every 10 iterations
-                if iteration % 10 == 0:
-                    await self.send_status_update(iteration)
+                # Status update disabled (too frequent)
+                # if iteration % 10 == 0:
+                #     await self.send_status_update(iteration)
                 
                 await asyncio.sleep(self.monitoring_interval)
                 
